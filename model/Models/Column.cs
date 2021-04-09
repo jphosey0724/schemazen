@@ -13,8 +13,11 @@ namespace SchemaZen.Library.Models {
 		public int Scale { get; set; }
 		public string Type { get; set; }
 		public string ComputedDefinition { get; set; }
+		public string CollationName { get; set; }
 		public bool IsRowGuidCol { get; set; }
-
+		public bool IsColumnSet { get; set; }
+		public bool IsSparse { get; set; }
+		public Table Table { get; set; }
 		public Column() { }
 
 		public Column(string name, string type, bool nullable, Default defaultValue) {
@@ -40,8 +43,17 @@ namespace SchemaZen.Library.Models {
 
 		private string IsNullableText {
 			get {
-				if (IsNullable || !string.IsNullOrEmpty(ComputedDefinition)) return "NULL";
-				return "NOT NULL";
+				if (IsNullable || IsSparse) {
+					return (IsSparse ? "SPARSE " : string.Empty) + "NULL";
+				} else {
+					return "NOT NULL";
+				}
+			}
+		}
+
+		private string IsPersistedText {
+			get {
+				return Persisted ? $"PERSISTED {(IsNullable ? string.Empty : $"NOT NULL")}" : string.Empty;
 			}
 		}
 
@@ -63,14 +75,19 @@ namespace SchemaZen.Library.Models {
 
 		public bool Persisted { get; set; }
 
+		private string CollationText {
+			get {
+				return !string.IsNullOrEmpty(CollationName) ? $"COLLATE {CollationName} " : string.Empty;
+			}
+		}
+
 		public ColumnDiff Compare(Column c) {
 			return new ColumnDiff(this, c);
 		}
 
 		private string ScriptBase() {
 			if (!string.IsNullOrEmpty(ComputedDefinition)) {
-				var persistedSetting = Persisted ? " PERSISTED" : string.Empty;
-				return $"[{Name}] AS {ComputedDefinition}{persistedSetting}";
+				return $"[{Name}] AS {ComputedDefinition} {IsPersistedText}";
 			}
 
 			var val = new StringBuilder($"[{Name}] [{Type}]");
@@ -101,7 +118,7 @@ namespace SchemaZen.Library.Models {
 				case "geography":
 				case "xml":
 				case "sysname":
-					val.Append($" {IsNullableText}");
+					val.Append($" {CollationText}{IsNullableText}");
 					if (IncludeDefaultConstraint) val.Append(DefaultText);
 					if (Identity != null) val.Append(IdentityText);
 					if (IsRowGuidCol) val.Append(RowGuidColText);
@@ -113,9 +130,12 @@ namespace SchemaZen.Library.Models {
 				case "nvarchar":
 				case "varbinary":
 				case "varchar":
+					if ((Type == "nchar" || Type == "nvarchar") && Length > 0) {
+						Length /= 2;
+					}
 					var lengthString = Length.ToString();
 					if (lengthString == "-1") lengthString = "max";
-					val.Append($"({lengthString}) {IsNullableText}");
+					val.Append($"({lengthString}) {CollationText}{IsNullableText}");
 					if (IncludeDefaultConstraint) val.Append(DefaultText);
 					return val.ToString();
 

@@ -23,13 +23,17 @@ namespace SchemaZen.Library.Models {
 
 		public string Script() {
 			var text = new StringBuilder();
-			foreach (var c in _mItems) {
+			var columns = _mItems.Where(c => c.IsColumnSet == false).ToList();
+			foreach (var c in columns) { 
 				text.Append("   " + c.ScriptCreate());
 				if (_mItems.IndexOf(c) < _mItems.Count - 1) {
 					text.AppendLine(",");
 				} else {
 					text.AppendLine();
 				}
+			}
+			foreach (var c in _mItems.Where(c => c.IsColumnSet)) {
+				text.AppendLine(string.Format("   {0} [xml] COLUMN_SET FOR ALL_SPARSE_COLUMNS", c.Name));
 			}
 
 			return text.ToString();

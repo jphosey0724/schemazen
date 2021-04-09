@@ -47,7 +47,7 @@ namespace SchemaZen.Tests {
 			public void computed_column() {
 				var c = new Column("test", "int", false, null) { ComputedDefinition = "(A + B)" };
 
-				Assert.AreEqual("[test] AS (A + B)", c.ScriptCreate());
+				Assert.AreEqual("[test] AS (A + B)", c.ScriptCreate().Trim());
 			}
 
 			[Test]
@@ -55,7 +55,7 @@ namespace SchemaZen.Tests {
 				var c = new Column("test", "int", false, null)
 					{ ComputedDefinition = "(A + B)", Persisted = true };
 
-				Assert.AreEqual("[test] AS (A + B) PERSISTED", c.ScriptCreate());
+				Assert.AreEqual("[test] AS (A + B) PERSISTED NOT NULL", c.ScriptCreate());
 			}
 		}
 	}

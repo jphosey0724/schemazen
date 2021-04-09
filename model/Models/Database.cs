@@ -838,54 +838,56 @@ order by fk.name, fkc.constraint_column_id
 			//get columns
 			cm.CommandText = @"
 				select 
-					t.TABLE_SCHEMA,
-					c.TABLE_NAME,
-					c.COLUMN_NAME,
-					c.DATA_TYPE,
-					c.ORDINAL_POSITION,
-					c.IS_NULLABLE,
-					c.CHARACTER_MAXIMUM_LENGTH,
-					c.NUMERIC_PRECISION,
-					c.NUMERIC_SCALE,
-					CASE WHEN COLUMNPROPERTY(OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME), c.COLUMN_NAME, 'IsRowGuidCol') = 1 THEN 'YES' ELSE 'NO' END AS IS_ROW_GUID_COL
-				from INFORMATION_SCHEMA.COLUMNS c
-					inner join INFORMATION_SCHEMA.TABLES t
-							on t.TABLE_NAME = c.TABLE_NAME
-								and t.TABLE_SCHEMA = c.TABLE_SCHEMA
-								and t.TABLE_CATALOG = c.TABLE_CATALOG
-				where
-					t.TABLE_TYPE = 'BASE TABLE'
-				order by t.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION
-";
+					sch.name as schemaName,
+					tbl.name as tableName,
+					col.column_id as columnId,
+					col.name as columnName,
+					col.collation_name,
+					typ.name as typeName,
+					col.is_rowguidcol as isRowGuidColumn,
+					col.is_column_set as isColumnSet,
+					col.is_sparse as isSparse,
+					col.is_nullable as isNullable,
+					col.max_length as maxLength,
+					col.[precision],
+					col.[scale],
+					col.xml_collection_id as xmlCollectionId
+				from sys.columns col
+				inner join sys.types typ on typ.user_type_id = col.user_type_id
+				inner join sys.tables tbl on tbl.object_id = col.object_id
+				inner join sys.schemas sch on sch.schema_id = tbl.schema_id
+				where tbl.is_ms_shipped = 0 
+					and not exists(select * from sys.extended_properties ep where ep.major_id = tbl.object_id and ep.[name] = 'microsoft_database_tools_support')
+				order by tbl.name, col.column_id
+			";
 			using (var dr = cm.ExecuteReader()) {
 				LoadColumnsBase(dr, Tables);
 			}
 
 			try {
 				cm.CommandText = @"
-				select 
-					s.name as TABLE_SCHEMA,
-					tt.name as TABLE_NAME, 
-					c.name as COLUMN_NAME,
-					t.name as DATA_TYPE,
-					c.column_id as ORDINAL_POSITION,
-					CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END as IS_NULLABLE,
-					CASE WHEN t.name = 'nvarchar' and c.max_length > 0 THEN CAST(c.max_length as int)/2 ELSE CAST(c.max_length as int) END as CHARACTER_MAXIMUM_LENGTH,
-					c.precision as NUMERIC_PRECISION,
-					CAST(c.scale as int) as NUMERIC_SCALE,
-					CASE WHEN c.is_rowguidcol = 1 THEN 'YES' ELSE 'NO' END as IS_ROW_GUID_COL
-				from sys.columns c
-					inner join sys.table_types tt
-						on tt.type_table_object_id = c.object_id
-					inner join sys.schemas s
-						on tt.schema_id = s.schema_id 
-					inner join sys.types t
-						on t.system_type_id = c.system_type_id
-							and t.user_type_id = c.user_type_id
-				where
-					tt.is_user_defined = 1
-				order by s.name, tt.name, c.column_id
-";
+					select 
+						sch.name as schemaName,
+						tt.name as tableName,
+						col.column_id as columnId,
+						col.name as columnName,
+						col.collation_name,
+						typ.name as typeName,
+						col.is_rowguidcol as isRowGuidColumn,
+						col.is_column_set as isColumnSet,
+						col.is_sparse as isSparse,
+						col.is_nullable as isNullable,
+						col.max_length as maxLength,
+						col.[precision],
+						col.[scale],
+						col.xml_collection_id as xmlCollectionId
+					from sys.columns col
+					inner join sys.types typ on typ.user_type_id = col.user_type_id
+					inner join sys.table_types tt on tt.type_table_object_id = col.object_id
+					inner join sys.schemas sch on sch.schema_id = tt.schema_id
+					where not exists(select * from sys.extended_properties ep where ep.major_id = tt.type_table_object_id and ep.[name] = 'microsoft_database_tools_support')
+					order by tt.name, col.column_id
+				";
 				using (var dr = cm.ExecuteReader()) {
 					LoadColumnsBase(dr, TableTypes);
 				}
@@ -894,16 +896,18 @@ order by fk.name, fkc.constraint_column_id
 			}
 		}
 
-		private static void LoadColumnsBase(IDataReader dr, List<Table> tables) {
+		private void LoadColumnsBase(IDataReader dr, List<Table> tables) {
 			Table table = null;
 
 			while (dr.Read()) {
 				var c = new Column {
-					Name = (string)dr["COLUMN_NAME"],
-					Type = (string)dr["DATA_TYPE"],
-					IsNullable = (string)dr["IS_NULLABLE"] == "YES",
-					Position = (int)dr["ORDINAL_POSITION"],
-					IsRowGuidCol = (string)dr["IS_ROW_GUID_COL"] == "YES"
+					Name = (string)dr["columnName"],
+					Type = (string)dr["typeName"],
+					IsNullable = (bool)dr["isNullable"],
+					Position = (int)dr["columnId"],
+					IsRowGuidCol = (bool)dr["isRowGuidColumn"],
+					IsSparse = (bool)dr["isSparse"],
+					IsColumnSet = (bool)dr["isColumnSet"],
 				};
 
 				switch (c.Type) {
@@ -913,23 +917,31 @@ order by fk.name, fkc.constraint_column_id
 					case "nvarchar":
 					case "varbinary":
 					case "varchar":
-						c.Length = (int)dr["CHARACTER_MAXIMUM_LENGTH"];
+						c.Length = Convert.ToInt32(dr["maxLength"]);
 						break;
 					case "decimal":
 					case "numeric":
-						c.Precision = (byte)dr["NUMERIC_PRECISION"];
-						c.Scale = (int)dr["NUMERIC_SCALE"];
+					case "datetime2":
+						c.Precision = (byte)dr["precision"];
+						c.Scale = Convert.ToInt32(dr["scale"]);
 						break;
 				}
 
-				if (table == null || table.Name != (string)dr["TABLE_NAME"] ||
-						table.Owner != (string)dr["TABLE_SCHEMA"])
+				if (table == null || table.Name != (string)dr["tableName"] ||
+						table.Owner != (string)dr["schemaName"])
 					// only do a lookup if the table we have isn't already the relevant one
 				{
-					table = FindTableBase(tables, (string)dr["TABLE_NAME"],
-						(string)dr["TABLE_SCHEMA"]);
+					table = FindTableBase(tables, (string)dr["tableName"],
+						(string)dr["schemaName"]);
 				}
+				c.Table = table;
 
+				DbProp prop = FindProp("COLLATE");
+				string collationName = dr["collation_name"].ToString();
+
+				if (prop != null && prop.Value != collationName && !string.IsNullOrEmpty(collationName)) {
+					c.CollationName = collationName;
+				}
 				table.Columns.Add(c);
 			}
 		}
